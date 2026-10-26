@@ -1,0 +1,21 @@
+/* Ajustes para as páginas web; o visual base é o mesmo do app (app.css, copiado na publicação). */
+body { min-height: 100vh; }
+.pagina { max-width: 480px; margin: 0 auto; padding: 32px 16px 48px; }
+.pagina.larga { max-width: 960px; }
+.topo-web { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 18px; }
+.topo-web h1 { font-family: Georgia, "Times New Roman", serif; font-weight: 600; font-size: 24px; margin: 0; }
+.topo-web .sub { color: var(--muted); font-size: 13px; }
+.link-btn { border: 0; background: none; color: var(--gold); font-weight: 600; padding: 6px 0; }
+.chip-st { display: inline-block; padding: 2px 9px; border-radius: 999px; font-size: 12px; font-weight: 700; white-space: nowrap; }
+.st-em_dia { background: var(--green-soft); color: var(--green); }
+.st-a_vencer { background: var(--gold-soft); color: var(--gold); }
+.st-vencida { background: var(--red-soft); color: var(--red); }
+.st-inativa { background: var(--surface-2); color: var(--muted); }
+.filtros { display: flex; gap: 8px; flex-wrap: wrap; margin: 14px 0; }
+.filtros input { flex: 1; min-width: 180px; }
+.qr { background: #fff; border-radius: 12px; padding: 10px; width: 200px; margin: 8px auto; }
+.qr svg { display: block; width: 100%; height: auto; }
+.copiar { display: flex; gap: 8px; }
+.copiar input { flex: 1; min-width: 0; }
+.grid-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(150px, 1fr)); gap: 10px; }
+@media (min-width: 720px) { .sheet { max-width: 560px; margin: 0 auto; } }
