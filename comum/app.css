@@ -13,6 +13,7 @@
   --red-soft: rgba(216, 96, 79, .14);
   --blue: #6c9bd8;
   --blue-soft: rgba(108, 155, 216, .14);
+  --on-gold: #1b150d;
   --radius: 14px;
   --nav-h: 64px;
 }
@@ -81,7 +82,7 @@ button { cursor: pointer; }
 .fab {
   position: fixed; right: 18px; bottom: calc(var(--nav-h) + 18px); z-index: 9;
   width: 56px; height: 56px; border-radius: 18px; border: 0;
-  background: var(--gold); color: #1b150d;
+  background: var(--gold); color: var(--on-gold);
   box-shadow: 0 6px 18px rgba(0,0,0,.45);
   display: flex; align-items: center; justify-content: center;
 }
@@ -199,7 +200,7 @@ button { cursor: pointer; }
 
 .btn {
   width: 100%; padding: 14px; border-radius: 12px; border: 0;
-  background: var(--gold); color: #1b150d; font-weight: 700; font-size: 15.5px;
+  background: var(--gold); color: var(--on-gold); font-weight: 700; font-size: 15.5px;
 }
 .btn:active { filter: brightness(.92); }
 .btn.ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--line); }
@@ -268,7 +269,7 @@ button { cursor: pointer; }
   flex: none; padding: 8px 11px; border-radius: 10px; border: 1px solid var(--line);
   background: var(--surface-2); font-variant-numeric: tabular-nums; font-size: 14px;
 }
-.slots button.on { background: var(--gold); color: #1b150d; border-color: var(--gold); font-weight: 700; }
+.slots button.on { background: var(--gold); color: var(--on-gold); border-color: var(--gold); font-weight: 700; }
 .btn.small { width: auto; padding: 8px 14px; font-size: 14px; flex: none; }
 .icon-btn.wa { color: var(--green); background: var(--green-soft); border-color: transparent; }
 .link { border: 0; background: none; color: var(--gold); font-weight: 600; font-size: 13px; text-transform: none; letter-spacing: 0; padding: 0; }
@@ -322,3 +323,40 @@ body.carregando::before { opacity: 1; animation: carregando 1s linear infinite; 
 
 /* Listas de horários em grade (página de agendamento) */
 .slots.grade { flex-wrap: wrap; overflow: visible; }
+
+/* ---------- Logo do tipo de estabelecimento ---------- */
+.logo-tipo {
+  display: inline-flex; align-items: center; justify-content: center; flex: none;
+  border-radius: 28%; background: color-mix(in srgb, var(--c) 18%, transparent); color: var(--c);
+  border: 1.5px solid color-mix(in srgb, var(--c) 55%, transparent);
+}
+.logo-tipo svg { width: 62%; height: 62%; }
+.brand .logo-tipo { margin: 0 auto 16px; }
+
+/* ---------- Sistema da equipe no computador: menu à esquerda ---------- */
+.nav .nav-marca { display: none; }
+@media (min-width: 900px) {
+  .shell { padding-left: 232px; }
+  .shell .nav {
+    top: 0; right: auto; width: 232px; height: auto;
+    flex-direction: column; justify-content: flex-start; gap: 2px;
+    padding: 18px 12px; border-top: 0; border-right: 1px solid var(--line);
+  }
+  .shell .nav .nav-marca { display: flex; align-items: center; gap: 10px; padding: 4px 8px 18px; font-weight: 700; min-width: 0; }
+  .shell .nav .nav-marca span:last-child { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+  .shell .nav button { flex: none; flex-direction: row; justify-content: flex-start; gap: 12px; padding: 11px 12px; border-radius: 10px; font-size: 14.5px; }
+  .shell .nav button:hover { background: var(--surface-2); color: var(--text); }
+  .shell .nav button.on { background: var(--gold-soft); color: var(--gold); }
+  .shell .topbar, .shell .content { max-width: 1040px; margin: 0 auto; padding-left: 28px; padding-right: 28px; }
+  .shell .content { padding-bottom: 110px; }
+  .shell .fab { bottom: 28px; right: 28px; }
+  .toast { bottom: 28px; }
+  .shell .content .stats { grid-template-columns: repeat(4, 1fr); }
+  .shell .content .quick { grid-template-columns: repeat(6, 1fr); }
+  button.item:hover, .item[role=button]:hover { background: var(--surface-2); }
+}
+@media (min-width: 720px) {
+  .overlay { align-items: center; padding: 24px; }
+  .sheet { border-radius: 18px; border: 1px solid var(--line); max-height: 88vh; }
+  .sheet .grab { display: none; }
+}

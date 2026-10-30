@@ -1,5 +1,5 @@
 /* Funções comuns das páginas web (agendamento do cliente e painel da plataforma).
-   Várias são cópias das do app (app/src/main/assets/www/app.js): mantenha as duas iguais. */
+   Várias são cópias das do app (web/app/app.js): mantenha as duas iguais. */
 'use strict';
 
 const SUPABASE_URL = 'https://shligovobghpcxixwqup.supabase.co';

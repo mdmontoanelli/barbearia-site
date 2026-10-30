@@ -4,17 +4,20 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <meta name="theme-color" content="#16130f">
-  <title>Barbearia</title>
+  <title>Agendamento online</title>
   <link rel="stylesheet" href="comum/app.css">
   <link rel="stylesheet" href="comum/web.css">
 </head>
 <body>
   <div class="pagina">
-    <div class="brand"><div class="pole"></div><h1>Barbearia</h1><p>Agendamento online</p></div>
+    <div class="brand"><div class="icones-login" id="logos"></div><h1>Agendamento online</h1><p>Barbearias, manicures e salões de beleza</p></div>
     <div class="btns">
       <a class="btn" style="display:block;text-align:center;text-decoration:none" href="agendar/">Agendar horário</a>
+      <a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="app/">Sistema da equipe</a>
       <a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="painel/">Painel administrativo</a>
     </div>
   </div>
+  <script src="comum/tipos.js"></script>
+  <script>document.getElementById('logos').innerHTML = Object.keys(TIPOS).map((t) => logoTipo(t, null, 48)).join('');</script>
 </body>
 </html>

@@ -1,8 +1,8 @@
-/* Agendamento pelo cliente: agendar/?b=codigo-da-barbearia
+/* Agendamento pelo cliente: agendar/?b=codigo-do-estabelecimento (barbearia, manicure ou salão)
    O cliente entra só com o celular, sem senha. Por isso esta página não lê nenhuma
    tabela: usa as funções cliente_* do banco (supabase/area_cliente.sql), que devolvem
    o mínimo e validam expediente, folga e choque de horário antes de gravar.
-   Cancelar ou remarcar continua sendo com a barbearia. */
+   Cancelar ou remarcar continua sendo com o estabelecimento. A página usa o logo do tipo e a cor dele. */
 'use strict';
 
 const sb = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY, { auth: { persistSession: false, autoRefreshToken: false } });
@@ -16,17 +16,17 @@ function tela(html) {
   window.scrollTo(0, 0);
 }
 const cabecalho = (titulo, sub) => `
-  <div class="brand"><div class="pole"></div><h1>${esc(titulo)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div>`;
+  <div class="brand">${CLI.info ? logoTipo(CLI.info.tipo, corDe(CLI.info), 64) : `<div class="icones-login">${Object.keys(TIPOS).map((t) => logoTipo(t, null, 48)).join('')}</div>`}<h1>${esc(titulo)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div>`;
 
-/* Sem código no link: o cliente digita o código que a barbearia divulgou. */
+/* Sem código no link: o cliente digita o código que o estabelecimento divulgou. */
 function telaCodigo(aviso = '') {
-  tela(`${cabecalho('Agendar horário', 'Digite o código da barbearia')}
+  tela(`${cabecalho('Agendar horário', 'Digite o código do estabelecimento')}
     <form id="f" autocomplete="off">
-      <div class="field"><label>Código da barbearia</label><input id="codigo" autocapitalize="none" autocorrect="off" required></div>
+      <div class="field"><label>Código do estabelecimento</label><input id="codigo" autocapitalize="none" autocorrect="off" required></div>
       <div class="err" id="err">${esc(aviso)}</div>
       <button class="btn" type="submit">Continuar</button>
     </form>
-    <p class="hint" style="text-align:center;margin-top:16px">Peça o link de agendamento para a sua barbearia.</p>`);
+    <p class="hint" style="text-align:center;margin-top:16px">Peça o link de agendamento para o estabelecimento.</p>`);
   $('#f').onsubmit = (e) => {
     e.preventDefault();
     const codigo = $('#codigo').value.trim().toLowerCase();
@@ -44,6 +44,7 @@ async function iniciar() {
     return telaCodigo(mensagemErro(e));
   }
   document.title = `Agendar · ${CLI.info.barbearia}`;
+  aplicarCor(corDe(CLI.info));
   return telaEntrada();
 }
 
@@ -108,8 +109,8 @@ async function telaArea() {
         <div class="main"><div class="t">${esc(a.data === today() ? 'Hoje' : fmtDay(a.data))}</div>
           <div class="s">${esc([a.servico, a.profissional && `com ${a.profissional}`].filter(Boolean).join(' · '))}</div></div>
       </div>`).join('')}</div>` : '<div class="card empty">Você não tem horários marcados.</div>'}
-    <p class="hint" style="text-align:center;margin-top:12px">Para cancelar ou remarcar, fale com a barbearia.</p>
-    ${wa ? `<a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="${esc(wa)}" target="_blank" rel="noopener">Falar com a barbearia no WhatsApp</a>` : ''}
+    <p class="hint" style="text-align:center;margin-top:12px">Para cancelar ou remarcar, fale com ${esc(CLI.info.barbearia)}.</p>
+    ${wa ? `<a class="btn ghost" style="display:block;text-align:center;text-decoration:none" href="${esc(wa)}" target="_blank" rel="noopener">Falar no WhatsApp</a>` : ''}
     <button class="link-btn" id="sair" style="display:block;margin:18px auto 0">Sair (usar outro número)</button>`;
   $('#agendar').onclick = safe(() => telaAgendar());
   $('#sair').onclick = () => { gravarLocal(`cliente:${CLI.codigo}`, ''); telaEntrada(); };
@@ -117,7 +118,7 @@ async function telaArea() {
 
 function telaAgendar() {
   const { servicos, profissionais } = CLI.info;
-  if (!servicos.length || !profissionais.length) return toast('Agendamento indisponível no momento. Fale com a barbearia.', true);
+  if (!servicos.length || !profissionais.length) return toast('Agendamento indisponível no momento. Fale com o estabelecimento.', true);
   const max = addDays(today(), DIAS_ANTECEDENCIA);
   const s = sheet(`
     <h3>Agendar horário</h3>
