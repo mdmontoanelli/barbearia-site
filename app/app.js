@@ -96,6 +96,7 @@ const MESES = ['Janeiro', 'Fevereiro', 'Março', 'Abril', 'Maio', 'Junho', 'Julh
 const DIAS_LONGO = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado'];
 const CORES = ['#c8963e', '#74b36f', '#6c9bd8', '#d8604f', '#a77bd8', '#47b5b0', '#e39a4f', '#d16ba5'];
 const PASSO_HORARIO = 15; // minutos entre os horários sugeridos na agenda
+const TEMPOS_ATENDIMENTO = [15, 20, 30, 40, 45, 50, 60, 75, 90, 105, 120, 150, 180, 210, 240];
 
 /* Mensagens do WhatsApp. Podem ser editadas em Mais → Mensagens do WhatsApp. */
 const MSG_PADRAO = {
@@ -833,6 +834,9 @@ async function expediente(prof, data) {
   return expedienteDoHorario(prof.horario, data);
 }
 
+/* Duração do atendimento: o tempo do profissional (Horários e folgas), senão a duração do serviço. */
+const duracaoDe = (prof, srv) => (prof && prof.tempo_atendimento) || (srv ? srv.duracao : 30);
+const textoTempo = (min) => (min >= 60 ? `${Math.floor(min / 60)} h${min % 60 ? ` ${min % 60} min` : ''}` : `${min} min`);
 const comIntervalo = (a) => ({ ...a, ini: toMin(a.hora), fim: toMin(a.hora) + (a.duracao || 30) });
 
 async function ocupados(profId, data, ignorarId) {
@@ -861,7 +865,7 @@ async function formAgendamento(ag = null, preset = {}) {
   const [clientes, servicos, profs] = await Promise.all([
     DB.q('SELECT id, nome, telefone FROM clientes ORDER BY lower(nome)'),
     DB.q('SELECT * FROM servicos WHERE ativo = 1 ORDER BY nome'),
-    DB.q('SELECT id, nome, horario FROM usuarios WHERE ativo = 1 ORDER BY nome'),
+    DB.q('SELECT id, nome, horario, tempo_atendimento FROM usuarios WHERE ativo = 1 ORDER BY nome'),
   ]);
   if (!clientes.length) {
     toast('Cadastre um cliente primeiro');
@@ -874,7 +878,7 @@ async function formAgendamento(ag = null, preset = {}) {
     data: S.view === 'agenda' ? S.agendaDate : today(),
     hora: '',
     valor: servicos[0] ? servicos[0].preco : 0,
-    duracao: servicos[0] ? servicos[0].duracao : 30,
+    duracao: duracaoDe(profs.find((p) => p.id === S.user.id), servicos[0]),
     observacoes: '',
   };
 
@@ -924,12 +928,14 @@ async function formAgendamento(ag = null, preset = {}) {
     const sel = $('button.on', box);
     if (sel) box.scrollLeft = sel.offsetLeft - box.offsetLeft - 40;
   });
+  const srvAtual = () => servicos.find((v) => String(v.id) === $('#srv', s).value);
   $('#srv', s).onchange = () => {
-    const x = servicos.find((v) => String(v.id) === $('#srv', s).value);
-    if (x) { $('#valor', s).value = moneyIn(x.preco); $('#dur', s).value = x.duracao; }
+    const x = srvAtual();
+    if (x) { $('#valor', s).value = moneyIn(x.preco); $('#dur', s).value = duracaoDe(prof(), x); }
     drawSlots();
   };
-  ['#prof', '#data', '#dur', '#hora'].forEach((k) => ($(k, s).onchange = drawSlots));
+  $('#prof', s).onchange = () => { $('#dur', s).value = duracaoDe(prof(), srvAtual()); drawSlots(); };
+  ['#data', '#dur', '#hora'].forEach((k) => ($(k, s).onchange = drawSlots));
   drawSlots();
 
   $('#cancel', s).onclick = closeSheet;
@@ -1105,7 +1111,7 @@ async function formEncaixe() {
   const [clientes, servicos, profs] = await Promise.all([
     DB.q('SELECT id, nome, telefone FROM clientes ORDER BY lower(nome)'),
     DB.q('SELECT * FROM servicos WHERE ativo = 1 ORDER BY nome'),
-    DB.q('SELECT id, nome FROM usuarios WHERE ativo = 1 ORDER BY nome'),
+    DB.q('SELECT id, nome, tempo_atendimento FROM usuarios WHERE ativo = 1 ORDER BY nome'),
   ]);
   const s = sheet(`
     <h3>Atender agora</h3>
@@ -1145,7 +1151,7 @@ async function formEncaixe() {
       id: null, cliente_id: clienteId, cliente: nome, telefone,
       servico_id: srv ? srv.id : null, servico: srv ? srv.nome : null,
       profissional_id: prof ? prof.id : null, profissional: prof ? prof.nome : null,
-      data: today(), hora: agora(), duracao: srv ? srv.duracao : 30, valor: srv ? srv.preco : 0,
+      data: today(), hora: agora(), duracao: duracaoDe(prof, srv), valor: srv ? srv.preco : 0,
     });
   });
 }
@@ -2570,7 +2576,7 @@ function formMensagens() {
 
 /* ---- Horários e folgas ---- */
 async function listaHorarios() {
-  const rows = await DB.q(`SELECT u.id, u.nome, u.cor, u.horario,
+  const rows = await DB.q(`SELECT u.id, u.nome, u.cor, u.horario, u.tempo_atendimento,
       (SELECT COUNT(*) FROM folgas f WHERE f.usuario_id=u.id AND f.data>=?) AS prox
     FROM usuarios u WHERE u.ativo=1 ORDER BY u.nome`, [today()]);
   const resumo = (u) => {
@@ -2586,7 +2592,8 @@ async function listaHorarios() {
       const prox = u.prox;
       return `<button class="item" data-u="${u.id}">
         <div class="avatar" style="background:${esc(corProf(u.id, u.cor))};color:#1b150d">${esc(initials(u.nome))}</div>
-        <div class="main"><div class="t">${esc(u.nome)}</div><div class="s">${esc(resumo(u))}</div>${prox ? `<div class="s">${prox} folga(s) marcada(s)</div>` : ''}</div>
+        <div class="main"><div class="t">${esc(u.nome)}</div><div class="s">${esc(resumo(u))}</div>
+          <div class="s">${u.tempo_atendimento ? `Cada atendimento: ${esc(textoTempo(u.tempo_atendimento))}` : 'Tempo de atendimento: o de cada serviço'}</div>${prox ? `<div class="s">${prox} folga(s) marcada(s)</div>` : ''}</div>
         <span style="color:var(--muted);width:18px">${ICON.right}</span>
       </button>`;
     }).join('')}</div>`);
@@ -2598,13 +2605,16 @@ function formHorario(u) {
   try { h = u.horario ? JSON.parse(u.horario) : null; } catch (e) { h = null; }
   const base = h || { 1: ['09:00', '19:00'], 2: ['09:00', '19:00'], 3: ['09:00', '19:00'], 4: ['09:00', '19:00'], 5: ['09:00', '19:00'], 6: ['09:00', '17:00'] };
   const s = sheet(`
-    <h3>Horário de ${esc(u.nome.split(' ')[0])}</h3>
+    <h3>Horário e tempo de ${esc(u.nome.split(' ')[0])}</h3>
     <div class="list">${[1, 2, 3, 4, 5, 6, 0].map((d) => `
       <div class="item hr-row">
         <label class="check"><input type="checkbox" data-on="${d}" ${base[d] ? 'checked' : ''}> ${DIAS_LONGO[d]}</label>
         <input type="time" data-ini="${d}" value="${esc(base[d] ? base[d][0] : '09:00')}">
         <input type="time" data-fim="${d}" value="${esc(base[d] ? base[d][1] : '19:00')}">
       </div>`).join('')}</div>
+    <div class="field" style="margin-top:14px"><label>Tempo de cada atendimento</label>
+      <select id="tempo">${opt('', 'Usar a duração de cada serviço', u.tempo_atendimento || '')}${TEMPOS_ATENDIMENTO.map((m) => opt(m, textoTempo(m), u.tempo_atendimento || '')).join('')}</select>
+      <div class="hint" style="margin-top:6px">Ex.: manicure que leva 2 h com cada cliente, barbeiro 45 min. Vale para a agenda e para o agendamento pelo site.</div></div>
     <div class="section-title">Folgas e ausências</div>
     <div class="row2">
       <div class="field"><label>Data</label><input id="fdata" type="date" value="${today()}"></div>
@@ -2643,7 +2653,8 @@ function formHorario(u) {
       if (!ini || !fim || toMin(fim) <= toMin(ini)) return ($('#err', s).textContent = `Horário inválido em ${DIAS_LONGO[d]}.`);
       novo[d] = [ini, fim];
     }
-    await DB.x('UPDATE usuarios SET horario=? WHERE id=?', [JSON.stringify(novo), u.id]);
+    const tempo = $('#tempo', s).value ? Number($('#tempo', s).value) : null;
+    await DB.x('UPDATE usuarios SET horario=?, tempo_atendimento=? WHERE id=?', [JSON.stringify(novo), tempo, u.id]);
     closeSheet(); closeSheet(); toast('Horário salvo');
     await listaHorarios();
   });

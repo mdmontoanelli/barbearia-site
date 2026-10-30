@@ -123,7 +123,7 @@ function telaAgendar() {
   const s = sheet(`
     <h3>Agendar horário</h3>
     <div class="field"><label>Serviço</label>
-      <select id="srv">${servicos.map((x) => opt(x.id, `${x.nome} — ${money(x.preco)} · ${x.duracao} min`, servicos[0].id)).join('')}</select></div>
+      <select id="srv">${servicos.map((x) => opt(x.id, `${x.nome} — ${money(x.preco)}`, servicos[0].id)).join('')}</select></div>
     <div class="row2">
       <div class="field"><label>Profissional</label>
         <select id="prof">${profissionais.map((p) => opt(p.id, p.nome, profissionais[0].id)).join('')}</select></div>
@@ -142,11 +142,13 @@ function telaAgendar() {
     const data = $('#data', s).value;
     err('');
     if (!data || data < today() || data > max) { box.innerHTML = `<div class="hint">Escolha um dia entre hoje e os próximos ${DIAS_ANTECEDENCIA} dias.</div>`; return; }
-    $('#dia-rotulo', s).textContent = `Horários livres · ${data === today() ? 'hoje' : fmtDay(data)}`;
     const p = prof();
+    // Tempo do profissional, senão a duração do serviço (o servidor usa a mesma regra).
+    const duracao = p.tempo_atendimento || srv().duracao;
+    $('#dia-rotulo', s).textContent = `Horários livres · ${data === today() ? 'hoje' : fmtDay(data)} · ${duracao >= 60 ? `${Math.floor(duracao / 60)} h${duracao % 60 ? ` ${duracao % 60} min` : ''}` : `${duracao} min`}`;
     const r = await chamar('cliente_ocupados', { p_codigo: CLI.codigo, p_profissional: p.id, p_data: data });
     const exp = r.folga ? { folga: 'folga' } : expedienteDoHorario(p.horario, data);
-    const res = calcularLivres(exp, r.ocupados.map(comIntervalo), data, srv().duracao);
+    const res = calcularLivres(exp, r.ocupados.map(comIntervalo), data, duracao);
     if (!res.livres.includes(hora)) hora = '';
     box.innerHTML = res.folga ? `<div class="hint neg">${esc(p.nome)} não atende neste dia.</div>`
       : res.livres.length ? res.livres.map((h) => `<button type="button" data-h="${h}" class="${h === hora ? 'on' : ''}">${h}</button>`).join('')
