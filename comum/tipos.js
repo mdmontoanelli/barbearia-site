@@ -44,3 +44,31 @@ function aplicarCor(hex) {
   r.setProperty('--gold-soft', `rgba(${(n >> 16) & 255}, ${(n >> 8) & 255}, ${n & 255}, .14)`);
   r.setProperty('--on-gold', textoSobre(hex));
 }
+
+/* Logo do estabelecimento: a imagem enviada, se houver; senão o logo do tipo na cor dele. */
+const logoEstab = (b, tam = 56) => (b && b.logo_url
+  ? `<img class="logo-img" src="${String(b.logo_url).replace(/["<>]/g, '')}" alt="" style="width:${tam}px;height:${tam}px">`
+  : logoTipo(b && b.tipo, b && corDe(b), tam));
+
+/* Reduz a imagem no próprio aparelho e envia para o Storage (bucket "imagens", pasta do estabelecimento).
+   Devolve o endereço público. maxLado = maior lado em pixels depois de reduzir. */
+async function enviarImagem(cliente, pasta, arquivo, prefixo, maxLado) {
+  if (!/^image\/(png|jpeg|webp|gif|heic|heif)$/i.test(arquivo.type || '')) throw new Error('Escolha uma imagem (PNG, JPG ou WEBP).');
+  const bmp = await createImageBitmap(arquivo).catch(() => { throw new Error('Não foi possível abrir esta imagem. Tente outra (PNG ou JPG).'); });
+  const fator = Math.min(1, maxLado / Math.max(bmp.width, bmp.height));
+  const cv = Object.assign(document.createElement('canvas'), { width: Math.round(bmp.width * fator), height: Math.round(bmp.height * fator) });
+  cv.getContext('2d').drawImage(bmp, 0, 0, cv.width, cv.height);
+  let blob = await new Promise((ok) => cv.toBlob(ok, 'image/webp', 0.85));
+  if (!blob || blob.type !== 'image/webp') blob = await new Promise((ok) => cv.toBlob(ok, 'image/png'));
+  const ext = blob.type === 'image/webp' ? 'webp' : 'png';
+  const caminho = `${pasta}/${prefixo}-${Date.now()}.${ext}`;
+  const { error } = await cliente.storage.from('imagens').upload(caminho, blob, { contentType: blob.type, upsert: false });
+  if (error) throw new Error(/row-level security|Unauthorized|403/i.test(error.message) ? 'Sem permissão para enviar imagens.' : error.message);
+  return cliente.storage.from('imagens').getPublicUrl(caminho).data.publicUrl;
+}
+
+/* Apaga do Storage uma imagem pelo endereço público (sem reclamar se já não existir). */
+async function apagarImagem(cliente, url) {
+  const m = String(url || '').match(/\/object\/public\/imagens\/(.+)$/);
+  if (m) await cliente.storage.from('imagens').remove([decodeURIComponent(m[1])]).catch(() => {});
+}

@@ -113,6 +113,7 @@ function montarPainel() {
         <div><b>Painel</b><small>Gestão dos estabelecimentos</small></div></div>
       ${Object.entries(ROTAS).map(([k, r]) => `<a href="#${k}" data-r="${k}">${ICON[r.icone]}<span>${r.rotulo}</span></a>`).join('')}
       <div class="rodape"><div style="color:var(--text);font-weight:600">${esc(P.nome)}</div><div>${esc(P.email)}</div>
+        <a href="#" id="instalar" style="padding:10px 0 0;display:none">${ICON.novo}<span>Instalar o painel</span></a>
         <a href="#" id="sair" style="padding:10px 0 0">${ICON.sair}<span>Sair</span></a></div>
     </aside>
     <div class="menu-fundo" id="fundo"></div>
@@ -128,6 +129,15 @@ function montarPainel() {
   $('#hamb').onclick = () => $('#app').classList.add('aberto');
   $('#fundo').onclick = fechar;
   document.querySelectorAll('[data-r]').forEach((a) => a.addEventListener('click', fechar));
+  if (pedidoInstalar) $('#instalar').style.display = '';
+  $('#instalar').onclick = async (e) => {
+    e.preventDefault();
+    if (!pedidoInstalar) return;
+    pedidoInstalar.prompt();
+    await pedidoInstalar.userChoice;
+    pedidoInstalar = null;
+    $('#instalar').style.display = 'none';
+  };
   $('#sair').onclick = safe(async (e) => { e.preventDefault(); await sb.auth.signOut(); location.hash = ''; telaLogin(); });
 }
 
@@ -196,11 +206,11 @@ async function telaDashboard(el) {
 
   $('#subtitulo').textContent = `Olá, ${P.nome.split(' ')[0]} · ${fmtDay(today())}`;
   $('#acoes').innerHTML = '<a class="btn small" href="#novo" style="text-decoration:none">+ Novo cadastro</a>';
-  const linhaEstab = (b, dir) => `<button class="item" data-b="${b.id}">${logoTipo(b.tipo, corDe(b), 40)}
+  const linhaEstab = (b, dir) => `<button class="item" data-b="${b.id}">${logoEstab(b, 40)}
       <div class="main"><div class="t">${esc(b.nome)}</div><div class="s">${dir.s}</div></div><div class="right">${dir.r}</div></button>`;
 
   el.innerHTML = `
-    <div class="grade k4">
+    <div class="blocos k4">
       <div class="stat"><div class="lbl">Estabelecimentos ativos</div><div class="val">${ativos.length}</div><div class="det">${novosMes} novo(s) este mês</div></div>
       <div class="stat gold"><div class="lbl">Receita mensal (contratos)</div><div class="val">${money(mrr)}</div><div class="det">média ${money(ativos.length ? mrr / ativos.length : 0)} por cliente</div></div>
       <div class="stat"><div class="lbl">Recebido em ${esc(MESES[Number(mes.slice(5)) - 1].toLowerCase())}</div><div class="val">${money(recebidoMes)}</div><div class="det">mensalidades pagas no mês</div></div>
@@ -208,18 +218,18 @@ async function telaDashboard(el) {
     </div>
 
     <div class="section-title">Clientes por tipo</div>
-    <div class="grade k3">${Object.entries(TIPOS).map(([t, info]) => {
+    <div class="blocos k3">${Object.entries(TIPOS).map(([t, info]) => {
       const doTipo = ativos.filter((b) => b.tipo === t);
       return `<a class="card tipo-card" href="#estabelecimentos" data-tipo="${t}" style="text-decoration:none;color:inherit">${logoTipo(t, null, 52)}
         <div><div class="n">${doTipo.length}</div><div class="s">${esc(doTipo.length === 1 ? info.nome : info.plural)} · ${money(doTipo.reduce((x, b) => x + Number(b.valor_mensal), 0))}/mês</div></div></a>`;
     }).join('')}</div>
 
-    <div class="grade k2" style="margin-top:12px">
+    <div class="blocos k2" style="margin-top:12px">
       <div class="card"><h4>Novos clientes por mês</h4>${colunas(novos, (v) => `${v} novo(s)`)}
         <details class="tabela"><summary>Ver tabela</summary><table class="dados"><tr><th>Mês</th><th>Novos</th></tr>
           ${novos.map((n) => `<tr><td>${esc(n.k)}</td><td>${n.v}</td></tr>`).join('')}</table></details></div>
       <div class="card"><h4>Uso do sistema (últimos 30 dias)</h4>
-        <div class="grade k2" style="gap:10px">
+        <div class="blocos k2" style="gap:10px">
           <div class="stat"><div class="lbl">Atendimentos concluídos</div><div class="val">${totalAtend}</div></div>
           <div class="stat"><div class="lbl">Clientes cadastrados</div><div class="val">${totalClientes}</div></div>
         </div>
@@ -228,7 +238,7 @@ async function telaDashboard(el) {
       </div>
     </div>
 
-    <div class="grade k2">
+    <div class="blocos k2">
       <div>
         <div class="section-title">Mensalidades vencidas</div>
         ${atrasados.length ? `<div class="list">${atrasados.sort((a, b) => b.m.vencidas.length - a.m.vencidas.length).map((x) => linhaEstab(x.b, {
@@ -298,7 +308,7 @@ function desenharLista() {
     .sort((a, b) => ordem[statusDe(a)] - ordem[statusDe(b)] || (a.ativo ? a.situacao.dias - b.situacao.dias : 0) || a.nome.localeCompare(b.nome));
   $('#lista').innerHTML = rows.length ? `<div class="list">${rows.map((b) => `
     <button class="item" data-b="${b.id}">
-      ${logoTipo(b.tipo, corDe(b), 40)}
+      ${logoEstab(b, 40)}
       <div class="main">
         <div class="t">${esc(b.nome)} <span class="hint">· ${esc(tipoDe(b.tipo).nome)} · ${esc(b.codigo)}</span></div>
         <div class="s">${esc([b.cidade, b.responsavel, `${b.usuarios} usuário(s)`, `${b.clientes} cliente(s)`].filter(Boolean).join(' · '))}</div>
@@ -479,7 +489,7 @@ async function detalhe(id, { boasVindas = null } = {}) {
     `Consta em aberto a mensalidade do sistema de ${m.vencidas.map((v) => monthLabel(v.ref).toLowerCase()).join(', ')} (${money(m.vencidas.length * Number(b.valor_mensal))}).`,
     'Se já pagou, desconsidere e me envie o comprovante, por favor. Obrigado!'].join('\n') : '';
   const s = sheet(`
-    <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${logoTipo(b.tipo, corDe(b), 52)}
+    <div style="display:flex;gap:12px;align-items:center;margin-bottom:14px">${logoEstab(b, 52)}
       <div style="min-width:0"><h3 style="margin:0">${esc(b.nome)}</h3><div class="hint">${esc(t.nome)} · <span class="chip-st st-${statusDe(b)}">${STATUS[statusDe(b)]}</span></div></div></div>
     ${boasVindas ? `<div class="card alert"><div><b>Dados de acesso para enviar ao responsável</b>
       <textarea id="bv" class="search" style="min-height:150px;margin-top:8px" readonly>${esc(msgBoasVindas)}</textarea>
@@ -496,9 +506,14 @@ async function detalhe(id, { boasVindas = null } = {}) {
       <div class="hint">${m.vencidas.map((v) => esc(monthLabel(v.ref))).join(', ')}</div></div>
       ${b.telefone ? `<div class="btns"><a class="btn green" style="text-align:center;text-decoration:none" target="_blank" rel="noopener" href="${esc(waLink(b.telefone, msgCobranca))}">Cobrar no WhatsApp</a></div>` : ''}</div>` : ''}
 
+    <div class="section-title">Logo</div>
+    <div class="logo-linha">${logoEstab(b, 56)}
+      <label class="btn small ghost">${b.logo_url ? 'Trocar logo' : 'Enviar logo'}<input type="file" id="logo-arq" accept="image/png,image/jpeg,image/webp" hidden></label>
+      ${b.logo_url ? '<button class="btn small danger" id="logo-rm">Remover</button>' : '<span class="hint">Sem logo próprio, aparece o símbolo do tipo.</span>'}</div>
+
     <div class="section-title">Sistema da equipe</div>
     <div class="copiar"><input class="search" id="sis" value="${esc(sistema)}" readonly style="margin:0"><button class="btn small ghost" id="copiar-sis">Copiar</button></div>
-    <div class="section-title">Link de agendamento dos clientes</div>
+    <div class="section-title">Página e agendamento dos clientes</div>
     <div class="copiar"><input class="search" id="link" value="${esc(link)}" readonly style="margin:0"><button class="btn small ghost" id="copiar">Copiar</button></div>
     ${qr ? `<div class="qr">${qr}</div><p class="hint" style="text-align:center">Imprima o QR code para o balcão.</p>` : ''}
 
@@ -522,6 +537,23 @@ async function detalhe(id, { boasVindas = null } = {}) {
   if ($('#bv-copiar', s)) $('#bv-copiar', s).onclick = () => copiar(msgBoasVindas);
   $('#copiar', s).onclick = () => copiar(link);
   $('#copiar-sis', s).onclick = () => copiar(sistema);
+  $('#logo-arq', s).onchange = safe(async (e) => {
+    const arq = e.target.files[0];
+    if (!arq) return;
+    carregando(1);
+    let url;
+    try { url = await enviarImagem(sb, b.id, arq, 'logo', 512); } finally { carregando(-1); }
+    await tabela(sb.from('barbearias').update({ logo_url: url }).eq('id', b.id));
+    apagarImagem(sb, b.logo_url);
+    toast('Logo atualizado');
+    await reabrir(b.id);
+  });
+  if ($('#logo-rm', s)) $('#logo-rm', s).onclick = safe(async () => {
+    await tabela(sb.from('barbearias').update({ logo_url: null }).eq('id', b.id));
+    apagarImagem(sb, b.logo_url);
+    toast('Logo removido');
+    await reabrir(b.id);
+  });
   $('#pagar', s).onclick = () => formPagamento(b);
   s.querySelectorAll('[data-rm]').forEach((el) => (el.onclick = safe(async () => {
     const p = pagamentos.find((x) => x.id === Number(el.dataset.rm));
@@ -700,27 +732,27 @@ async function telaFinanceiro(el) {
       <div class="d">${esc(per.rotulo)}</div>
       <button class="iconbtn" id="prox" aria-label="Próximo">${ICON.dir}</button>
     </div>
-    <div class="grade k4">
+    <div class="blocos k4">
       <div class="stat"><div class="lbl">Recebido</div><div class="val pos">${money(mensal + outras)}</div><div class="det">${money(mensal)} mensalidades · ${money(outras)} outras</div></div>
       <div class="stat"><div class="lbl">Despesas</div><div class="val neg">${money(despesas)}</div><div class="det">${movs.filter((m) => m.tipo === 'saida').length} lançamento(s)</div></div>
       <div class="stat gold"><div class="lbl">Resultado</div><div class="val ${resultado >= 0 ? '' : 'neg'}">${money(resultado)}</div><div class="det">recebido − despesas</div></div>
       <div class="stat"><div class="lbl">Mensalidades previstas</div><div class="val">${money(previsto)}</div><div class="det">${previsto ? Math.round((pagoPrev / previsto) * 100) : 0}% já pago · falta ${money(previsto - pagoPrev)}</div></div>
     </div>
 
-    <div class="grade k2" style="margin-top:12px">
+    <div class="blocos k2" style="margin-top:12px">
       <div class="card"><h4>Recebido por mês</h4>${colunas(porMes, (v) => money(v))}
         <details class="tabela"><summary>Ver tabela</summary><div class="rolar"><table class="dados"><tr><th>Mês</th><th>Recebido</th><th>Despesas</th><th>Resultado</th></tr>
           ${porMes.map((r) => `<tr><td>${esc(r.k)}</td><td>${money(r.v)}</td><td>${money(r.sai)}</td><td class="${r.v - r.sai < 0 ? 'neg' : ''}">${money(r.v - r.sai)}</td></tr>`).join('')}</table></div></details></div>
       <div class="card"><h4>Mensalidades em atraso · ${money(atraso)}</h4>
         ${abertos.length ? `<div class="list">${abertos.map((x) => `
-          <div class="item">${logoTipo(x.b.tipo, corDe(x.b), 36)}
+          <div class="item">${logoEstab(x.b, 36)}
             <div class="main"><div class="t">${esc(x.b.nome)}</div><div class="s">${x.m.vencidas.length} mês(es) · desde ${esc(fmtDate(x.m.vencidas[0].venc))}</div></div>
             <div class="right neg">${money(x.m.vencidas.length * Number(x.b.valor_mensal))}</div>
             <button class="btn small ghost" data-pagar="${x.b.id}">Receber</button></div>`).join('')}</div>`
           : '<div class="empty">Nenhuma mensalidade em atraso.</div>'}</div>
     </div>
 
-    <div class="grade k3" style="margin-top:12px">
+    <div class="blocos k3" style="margin-top:12px">
       <div class="card"><h4>Entradas por forma</h4>${porForma.length ? barras(porForma, (v) => money(v)) : '<div class="empty">Sem entradas.</div>'}</div>
       <div class="card"><h4>Mensalidades por tipo</h4>${barras(porTipo, (v) => money(v))}</div>
       <div class="card"><h4>Despesas por categoria</h4>${porCatSaida.length ? barras(porCatSaida, (v) => money(v)) : '<div class="empty">Sem despesas.</div>'}</div>
@@ -859,5 +891,14 @@ function formUsuario(u) {
     return irPara();
   });
 }
+
+/* Instalar como aplicativo (Chrome/Edge mostram o pedido; no iPhone é pelo Compartilhar). */
+let pedidoInstalar = null;
+window.addEventListener('beforeinstallprompt', (e) => {
+  e.preventDefault();
+  pedidoInstalar = e;
+  if ($('#instalar')) $('#instalar').style.display = '';
+});
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('../sw.js').catch(() => {});
 
 safe(iniciar)();

@@ -347,7 +347,7 @@ const S = {
   finMonth: monthKey(today()),
   dashboardPeriod: 'day',
   clienteBusca: '',
-  agendaModo: 'dia',
+  agendaModo: window.matchMedia && matchMedia('(min-width: 900px)').matches ? 'grade' : 'dia',
   sumidosDias: 30,
   analisePeriodo: 90,
   backupAviso: null,
@@ -381,7 +381,7 @@ const lerLocal = (k) => { try { return localStorage.getItem(k) || ''; } catch (e
 const gravarLocal = (k, v) => { try { if (v) localStorage.setItem(k, v); else localStorage.removeItem(k); } catch (e) { /* sem storage */ } };
 
 /* Cabeçalho das telas de entrada, com o logo do tipo e a cor do estabelecimento. */
-const marca = (b, titulo, sub) => `<div class="brand">${logoTipo(b && b.tipo, b && corDe(b), 64)}<h1>${esc(titulo)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div>`;
+const marca = (b, titulo, sub) => `<div class="brand">${logoEstab(b, 64)}<h1>${esc(titulo)}</h1>${sub ? `<p>${esc(sub)}</p>` : ''}</div>`;
 
 function aplicarEstabelecimento(b) {
   S.estab = b;
@@ -521,7 +521,7 @@ function renderShell() {
     </div>
     <div class="content" id="content"></div>
     <button class="fab" id="fab" aria-label="Adicionar">${ICON.plus}</button>
-    <nav class="nav"><div class="nav-marca">${logoTipo(S.estab && S.estab.tipo, S.estab && corDe(S.estab), 34)}<span>${esc(cfg('nome_barbearia', S.estab ? S.estab.nome : ''))}</span></div>${tabs.map(([k, v]) => `<button data-v="${k}">${ICON[v.icon]}<span>${v.label}</span></button>`).join('')}</nav>`;
+    <nav class="nav"><div class="nav-marca">${logoEstab(S.estab, 34)}<span>${esc(cfg('nome_barbearia', S.estab ? S.estab.nome : ''))}</span></div>${tabs.map(([k, v]) => `<button data-v="${k}">${ICON[v.icon]}<span>${v.label}</span></button>`).join('')}</nav>`;
   document.querySelectorAll('.nav button').forEach((b) => (b.onclick = () => go(b.dataset.v)));
   go(S.view);
   // Despesas fixas e backup automático só para o administrador (o profissional não vê o financeiro).
@@ -740,6 +740,7 @@ async function viewInicio(el) {
 /* ======================= AGENDA ======================= */
 async function viewAgenda(el) {
   if (S.agendaModo === 'semana') return viewSemana(el);
+  if (S.agendaModo === 'grade') return viewGrade(el);
   const d = S.agendaDate;
   const [ags, amanha] = await Promise.all([
     DB.q(`${SQL_AG} WHERE a.data = ? ORDER BY a.hora`, [d]),
@@ -750,12 +751,7 @@ async function viewAgenda(el) {
 
   el.innerHTML = `
     ${segModoAgenda()}
-    <div class="datebar">
-      <button class="iconbtn" id="prev">${ICON.left}</button>
-      <div class="d">${d === today() ? 'Hoje, ' : ''}${esc(fmtDay(d))}<input type="date" id="dpick" value="${d}"></div>
-      <button class="iconbtn" id="next">${ICON.right}</button>
-    </div>
-    ${d !== today() ? '<button class="btn ghost" id="hoje" style="margin-bottom:12px">Voltar para hoje</button>' : ''}
+    ${barraDia(d)}
     <div class="btns two" style="margin:0 0 12px">
       <button class="btn ghost" id="encaixe">Atender agora</button>
       <button class="btn ghost" id="lembretes">Lembretes de amanhã${amanha ? ` (${amanha})` : ''}</button>
@@ -763,19 +759,96 @@ async function viewAgenda(el) {
     ${ags.length ? `<div class="list">${ags.map((a) => agItem(a)).join('')}</div>` : '<div class="card empty">Nenhum agendamento neste dia.<br>Toque no + para agendar.</div>'}
   `;
   bindModoAgenda(el);
-  $('#prev').onclick = () => { S.agendaDate = addDays(d, -1); refresh(); };
-  $('#next').onclick = () => { S.agendaDate = addDays(d, 1); refresh(); };
-  $('#dpick').onchange = (e) => { if (e.target.value) { S.agendaDate = e.target.value; refresh(); } };
-  if ($('#hoje')) $('#hoje').onclick = () => { S.agendaDate = today(); refresh(); };
+  bindBarraDia(el, d);
   $('#encaixe').onclick = safe(() => formEncaixe());
   $('#lembretes').onclick = safe(() => lembretesAmanha());
   bindAgItems(el);
 }
 
-const segModoAgenda = () => `<div class="seg" id="modo">${[['dia', 'Dia'], ['semana', 'Semana']].map(([k, l]) =>
+const segModoAgenda = () => `<div class="seg" id="modo">${[['dia', 'Lista'], ['grade', 'Grade'], ['semana', 'Semana']].map(([k, l]) =>
   `<button data-modo="${k}" class="${S.agendaModo === k ? 'on' : ''}">${l}</button>`).join('')}</div>`;
 function bindModoAgenda(el) {
   el.querySelectorAll('[data-modo]').forEach((b) => (b.onclick = () => { S.agendaModo = b.dataset.modo; refresh(); }));
+}
+
+/* Grade do dia: uma coluna por profissional e os horários na vertical, como uma agenda de papel.
+   Clicar num horário vazio abre o agendamento já com o profissional, o dia e a hora. */
+const PX_MIN = 1.4; // altura de cada minuto na grade
+async function viewGrade(el) {
+  const d = S.agendaDate;
+  const [ags, profs, folgas] = await Promise.all([
+    DB.q(`${SQL_AG} WHERE a.data = ? AND a.status <> 'cancelado' ORDER BY a.hora`, [d]),
+    DB.q('SELECT id, nome, cor, horario FROM usuarios WHERE ativo=1 ORDER BY nome'),
+    DB.q('SELECT usuario_id, motivo FROM folgas WHERE data=?', [d]),
+  ]);
+  $('#subtitle').textContent = `${ags.length} atendimento(s) · ${money(ags.reduce((t, a) => t + a.valor, 0))}`;
+  const cols = profs.map((p) => {
+    const f = folgas.find((x) => x.usuario_id === p.id);
+    return { ...p, exp: f ? { folga: f.motivo || 'folga' } : expedienteDoHorario(p.horario, d), ags: ags.filter((a) => a.profissional_id === p.id) };
+  });
+  const semProf = ags.filter((a) => !profs.some((p) => p.id === a.profissional_id));
+  if (semProf.length) cols.push({ id: 0, nome: 'Sem profissional', exp: { folga: '' }, ags: semProf });
+  // Faixa de horas: do primeiro início ao último fim (expedientes e atendimentos), em horas cheias.
+  const abertos = cols.filter((c) => !c.exp.folga).map((c) => c.exp);
+  const inis = [...abertos.map((e) => toMin(e.inicio)), ...ags.map((a) => toMin(a.hora))];
+  const fins = [...abertos.map((e) => toMin(e.fim)), ...ags.map((a) => toMin(a.hora) + (a.duracao || 30))];
+  const ini = Math.floor((inis.length ? Math.min(...inis) : 480) / 60) * 60;
+  const fim = Math.ceil((fins.length ? Math.max(...fins) : 1200) / 60) * 60;
+  const y = (m) => Math.round((m - ini) * PX_MIN);
+  const horas = [];
+  for (let m = ini; m < fim; m += 60) horas.push(m);
+  const agoraMin = d === today() ? toMin(agora()) : -1;
+  const fora = (c) => {
+    if (c.exp.folga !== undefined) return c.id ? `<div class="ga-fora" style="top:0;bottom:0"><span>${esc(c.exp.folga || 'folga')}</span></div>` : '';
+    return [[ini, toMin(c.exp.inicio)], [toMin(c.exp.fim), fim]].filter(([a, b]) => b > a)
+      .map(([a, b]) => `<div class="ga-fora" style="top:${y(a)}px;height:${y(b) - y(a)}px"></div>`).join('');
+  };
+  const bloco = (a) => {
+    const dur = a.duracao || 30;
+    return `<button class="ga-ag ga-${esc(a.status)}" data-ag="${a.id}" style="top:${y(toMin(a.hora))}px;height:${Math.max(y(toMin(a.hora) + dur) - y(toMin(a.hora)) - 2, 24)}px;--prof:${esc(corProf(a.profissional_id, a.prof_cor))}">
+      <b>${esc(a.hora)}</b> ${esc(a.cliente)}${dur >= 30 ? `<small>${esc(a.servico || 'Sem serviço')} · ${money(a.valor)}</small>` : ''}</button>`;
+  };
+
+  el.innerHTML = `
+    ${segModoAgenda()}
+    ${barraDia(d)}
+    <div class="grade-ag"><div class="ga-tabela" style="--cols:${cols.length || 1}">
+      <div class="ga-cab"><div></div>${cols.map((c) => `<div class="ga-prof"><i style="background:${esc(c.id ? corProf(c.id, c.cor) : 'var(--line)')}"></i>${esc(c.nome.split(' ')[0])}
+        <small>${c.exp.folga !== undefined ? '' : `${esc(c.exp.inicio)}–${esc(c.exp.fim)}`}</small></div>`).join('')}</div>
+      <div class="ga-corpo" style="height:${y(fim)}px;--hora:${60 * PX_MIN}px">
+        <div class="ga-horas">${horas.map((m) => `<span style="top:${y(m)}px">${fromMin(m)}</span>`).join('')}</div>
+        ${cols.map((c) => `<div class="ga-col" data-p="${c.id}">${fora(c)}${c.ags.map(bloco).join('')}</div>`).join('')}
+        ${agoraMin >= ini && agoraMin <= fim ? `<div class="ga-agora" style="top:${y(agoraMin)}px"></div>` : ''}
+      </div>
+    </div></div>
+    ${cols.length ? '<p class="hint" style="margin-top:10px">Clique num horário vazio para agendar.</p>' : '<div class="card empty">Cadastre os profissionais em Mais → Usuários.</div>'}`;
+  bindModoAgenda(el);
+  bindBarraDia(el, d);
+  el.querySelectorAll('.ga-col').forEach((col) => (col.onclick = safe((e) => {
+    if (e.target.closest('[data-ag]')) return undefined;
+    const c = cols.find((x) => x.id === Number(col.dataset.p));
+    if (!c || !c.id) return undefined;
+    if (c.exp.folga !== undefined) return toast(`${c.nome.split(' ')[0]} não atende neste dia`, true);
+    const m = ini + Math.floor((e.clientY - col.getBoundingClientRect().top) / PX_MIN / PASSO_HORARIO) * PASSO_HORARIO;
+    if (m < toMin(c.exp.inicio) || m >= toMin(c.exp.fim)) return toast('Fora do expediente deste profissional', true);
+    return formAgendamento(null, { profissional_id: c.id, data: d, hora: fromMin(m) });
+  })));
+  bindAgItems(el);
+}
+
+/* Barra de dia (anterior, data, próximo) usada na lista e na grade. */
+const barraDia = (d) => `
+    <div class="datebar">
+      <button class="iconbtn" id="prev">${ICON.left}</button>
+      <div class="d">${d === today() ? 'Hoje, ' : ''}${esc(fmtDay(d))}<input type="date" id="dpick" value="${d}"></div>
+      <button class="iconbtn" id="next">${ICON.right}</button>
+    </div>
+    ${d !== today() ? '<button class="btn ghost" id="hoje" style="margin-bottom:12px">Voltar para hoje</button>' : ''}`;
+function bindBarraDia(el, d) {
+  $('#prev', el).onclick = () => { S.agendaDate = addDays(d, -1); refresh(); };
+  $('#next', el).onclick = () => { S.agendaDate = addDays(d, 1); refresh(); };
+  $('#dpick', el).onchange = (e) => { if (e.target.value) { S.agendaDate = e.target.value; refresh(); } };
+  if ($('#hoje', el)) $('#hoje', el).onclick = () => { S.agendaDate = today(); refresh(); };
 }
 
 /* Semana de segunda a domingo, com a cor de cada profissional. */
@@ -874,11 +947,11 @@ async function formAgendamento(ag = null, preset = {}) {
   const a = ag || {
     cliente_id: preset.cliente_id || '',
     servico_id: servicos[0] ? servicos[0].id : '',
-    profissional_id: S.user.id,
-    data: S.view === 'agenda' ? S.agendaDate : today(),
-    hora: '',
+    profissional_id: preset.profissional_id || S.user.id,
+    data: preset.data || (S.view === 'agenda' ? S.agendaDate : today()),
+    hora: preset.hora || '',
     valor: servicos[0] ? servicos[0].preco : 0,
-    duracao: duracaoDe(profs.find((p) => p.id === S.user.id), servicos[0]),
+    duracao: duracaoDe(profs.find((p) => p.id === (preset.profissional_id || S.user.id)), servicos[0]),
     observacoes: '',
   };
 
@@ -2110,9 +2183,11 @@ function viewMais(el) {
       ['mensagens', 'Mensagens do WhatsApp', 'Confirmação, lembrete, parabéns…'],
       ['taxas', 'Taxas da maquininha', `Débito ${cfg('taxa_debito', '0')}% · Crédito ${cfg('taxa_credito', '0')}% · Pix ${cfg('taxa_pix', '0')}%`],
       ['barbearia', 'Nome do estabelecimento', cfg('nome_barbearia', '')],
+      ['vitrine', 'Página e agendamento online', 'Logo, fotos, endereço e cancelamento pelo cliente'],
       ['backup', 'Backup dos dados', ultimoBackup ? `Último: ${fmtDate(ultimoBackup)}` : 'Baixar uma cópia dos dados'],
       ['exclusoes', 'Histórico de exclusões', 'O que foi apagado, quando e por quem'],
     ] : []),
+    ...(appInstalado() ? [] : [['instalar', 'Instalar o app', 'Ícone na tela inicial, abre em tela cheia']]),
     ['senha', 'Alterar minha senha', S.user.login],
     ['sair', 'Sair', 'Encerrar a sessão'],
   ];
@@ -2127,7 +2202,7 @@ function viewMais(el) {
     servicos: listaServicos, usuarios: listaUsuarios, barbearia: formNomeBarbearia,
     backup: telaBackup, senha: formMinhaSenha, sair: logout,
     pacotes: listaPacotes, fidelidade: formFidelidade, horarios: listaHorarios,
-    mensagens: formMensagens, taxas: formTaxas, exclusoes: listaExclusoes,
+    mensagens: formMensagens, taxas: formTaxas, exclusoes: listaExclusoes, vitrine: formVitrine, instalar: instalarApp,
   };
   el.querySelectorAll('[data-k]').forEach((b) => (b.onclick = safe(() => acts[b.dataset.k]())));
 }
@@ -2659,6 +2734,119 @@ function formHorario(u) {
     await listaHorarios();
   });
 }
+
+/* ---- Página do estabelecimento (vitrine) e agendamento online ---- */
+const ANTECEDENCIAS = [1, 2, 3, 4, 6, 12, 24, 48];
+async function formVitrine() {
+  const link = new URL(`../agendar/?b=${encodeURIComponent(S.codigo)}`, location.href).href;
+  const pasta = await DB.rpc('minha_barbearia');
+  let fotos = [];
+  try { fotos = JSON.parse(cfg('vitrine_fotos', '[]')) || []; } catch (e) { fotos = []; }
+  const s = sheet(`
+    <h3>Página e agendamento online</h3>
+    <p class="hint" style="margin-top:-8px">É a página que seus clientes abrem pelo link ou QR code: mostra serviços, preços, fotos e o botão para agendar.</p>
+    <div style="display:flex;gap:8px"><input class="search" readonly value="${esc(link)}" style="margin:0">
+      <a class="btn small ghost" href="${esc(link)}" target="_blank" rel="noopener" style="text-decoration:none;display:flex;align-items:center">Abrir</a></div>
+    <div class="section-title">Logo</div>
+    <div class="logo-linha"><span id="logo-prev"></span>
+      <label class="btn small ghost">Enviar logo<input type="file" id="logo-arq" accept="image/png,image/jpeg,image/webp" hidden></label>
+      <button class="btn small danger" id="logo-rm">Remover</button></div>
+    <p class="hint">Sem logo próprio, aparece o símbolo do tipo na cor do estabelecimento.</p>
+    <div class="section-title">Sobre</div>
+    <div class="field"><label>Apresentação</label><textarea id="sobre" maxlength="600" placeholder="Ex.: Atendimento com hora marcada, ambiente climatizado, estacionamento na porta.">${esc(cfg('vitrine_sobre', ''))}</textarea></div>
+    <div class="field"><label>Endereço</label><input id="end" value="${esc(cfg('vitrine_endereco', ''))}" placeholder="Rua, número, bairro, cidade"></div>
+    <div class="field"><label>Instagram</label><input id="insta" value="${esc(cfg('vitrine_instagram', ''))}" placeholder="@seuperfil" autocapitalize="none"></div>
+    <div class="section-title">Fotos (até 6)</div>
+    <div class="fotos-ed" id="fotos"></div>
+    <div class="section-title">Cancelar e remarcar pelo site</div>
+    <div class="row2">
+      <div class="field"><label>O cliente pode</label><select id="cancela">${opt('1', 'Cancelar e remarcar', cfg('cliente_cancela', '1'))}${opt('0', 'Só falando com a gente', cfg('cliente_cancela', '1'))}</select></div>
+      <div class="field"><label>Até quanto tempo antes</label><select id="antec">${ANTECEDENCIAS.map((h) => opt(h, h < 24 ? `${h} h antes` : `${h / 24} dia(s) antes`, cfg('cliente_antecedencia', '2'))).join('')}</select></div>
+    </div>
+    <div class="err" id="err"></div>
+    <div class="btns two"><button class="btn ghost" id="c">Fechar</button><button class="btn" id="ok">Salvar</button></div>`);
+  const desenharLogo = () => {
+    $('#logo-prev', s).innerHTML = logoEstab(S.estab, 64);
+    $('#logo-rm', s).style.display = S.estab.logo_url ? '' : 'none';
+    const nav = $('.nav-marca');
+    if (nav) nav.firstElementChild.outerHTML = logoEstab(S.estab, 34);
+  };
+  const desenharFotos = () => {
+    $('#fotos', s).innerHTML = fotos.map((u, i) => `<div class="foto"><img src="${esc(u)}" alt=""><button class="icon-btn danger" data-rmf="${i}" aria-label="Remover foto">✕</button></div>`).join('')
+      + (fotos.length < 6 ? `<label class="foto nova">${ICON.plus}<span>Adicionar</span><input type="file" id="foto-arq" accept="image/png,image/jpeg,image/webp" hidden></label>` : '');
+    s.querySelectorAll('[data-rmf]').forEach((b) => (b.onclick = safe(async () => {
+      const [url] = fotos.splice(Number(b.dataset.rmf), 1);
+      await setCfg('vitrine_fotos', JSON.stringify(fotos));
+      apagarImagem(sb, url);
+      desenharFotos();
+    })));
+    if ($('#foto-arq', s)) $('#foto-arq', s).onchange = safe(async (e) => {
+      const arq = e.target.files[0];
+      if (!arq) return;
+      carregando(1);
+      try { fotos.push(await enviarImagem(sb, pasta, arq, 'foto', 1280)); } finally { carregando(-1); }
+      await setCfg('vitrine_fotos', JSON.stringify(fotos));
+      desenharFotos();
+      toast('Foto adicionada');
+    });
+  };
+  desenharLogo();
+  desenharFotos();
+  $('#logo-arq', s).onchange = safe(async (e) => {
+    const arq = e.target.files[0];
+    if (!arq) return;
+    carregando(1);
+    let url;
+    try { url = await enviarImagem(sb, pasta, arq, 'logo', 512); } finally { carregando(-1); }
+    await DB.rpc('admin_definir_logo', { p_url: url });
+    apagarImagem(sb, S.estab.logo_url);
+    S.estab.logo_url = url;
+    desenharLogo();
+    toast('Logo atualizado');
+  });
+  $('#logo-rm', s).onclick = safe(async () => {
+    await DB.rpc('admin_definir_logo', { p_url: null });
+    apagarImagem(sb, S.estab.logo_url);
+    S.estab.logo_url = null;
+    desenharLogo();
+    toast('Logo removido');
+  });
+  $('#c', s).onclick = closeSheet;
+  $('#ok', s).onclick = safe(async () => {
+    const insta = $('#insta', s).value.trim().replace(/^https?:\/\/(www\.)?instagram\.com\//i, '').replace(/[/?].*$/, '').replace(/^@/, '');
+    if (insta && !/^[A-Za-z0-9._]{1,30}$/.test(insta)) return ($('#err', s).textContent = 'Instagram: informe só o @ do perfil.');
+    await setCfgs([
+      ['vitrine_sobre', $('#sobre', s).value.trim()], ['vitrine_endereco', $('#end', s).value.trim()], ['vitrine_instagram', insta],
+      ['cliente_cancela', $('#cancela', s).value], ['cliente_antecedencia', $('#antec', s).value],
+    ]);
+    closeSheet();
+    toast('Página salva');
+    return refresh();
+  });
+}
+
+/* ---- Instalar como aplicativo (PWA) ---- */
+let pedidoInstalar = null;
+window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); pedidoInstalar = e; });
+const appInstalado = () => (window.matchMedia && matchMedia('(display-mode: standalone)').matches) || navigator.standalone === true;
+async function instalarApp() {
+  if (pedidoInstalar) {
+    pedidoInstalar.prompt();
+    const r = await pedidoInstalar.userChoice;
+    pedidoInstalar = null;
+    if (r.outcome === 'accepted') toast('App instalado');
+    return;
+  }
+  const ios = /iphone|ipad|ipod/i.test(navigator.userAgent);
+  const s = sheet(`
+    <h3>Instalar o app</h3>
+    ${ios ? '<p>No iPhone, abra esta página no <b>Safari</b>, toque em <b>Compartilhar</b> (quadrado com a seta para cima) e depois em <b>Adicionar à Tela de Início</b>.</p>'
+      : '<p>No <b>Android</b> (Chrome): toque no menu <b>⋮</b> e em <b>Instalar app</b> (ou <b>Adicionar à tela inicial</b>).</p><p>No <b>computador</b> (Chrome ou Edge): clique no ícone de instalar, no fim da barra de endereço.</p>'}
+    <p class="hint">Depois é só abrir pelo ícone, como um aplicativo.</p>
+    <button class="btn ghost" id="c">Entendi</button>`, { center: true });
+  $('#c', s).onclick = closeSheet;
+}
+if ('serviceWorker' in navigator) navigator.serviceWorker.register('../sw.js').catch(() => {});
 
 /* ---- Histórico de exclusões ---- */
 async function listaExclusoes() {
