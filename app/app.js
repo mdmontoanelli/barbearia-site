@@ -1390,6 +1390,8 @@ function cmdsConclusao(ctx, forma, taxa) {
 
 /* ======================= PAGAMENTOS ONLINE (ASAAS) ======================= */
 const PAGOS_ASAAS = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'];
+const SITUACAO_CONTA = { PENDING: 'aguardando análise', AWAITING_APPROVAL: 'aguardando aprovação', REJECTED: 'reprovada', APPROVED: 'aprovada' };
+const SITUACAO_CHAVE = { AWAITING_ACTIVATION: 'aguardando ativação', ACTIVE: 'ativa', AWAITING_DELETION: 'sendo excluída', AWAITING_ACCOUNT_DELETION: 'conta sendo excluída', DELETED: 'excluída', ERROR: 'com erro' };
 const FORMA_ASAAS = { PIX: 'Pix', CREDIT_CARD: 'Crédito', DEBIT_CARD: 'Débito', BOLETO: 'Boleto' };
 const STATUS_ASAAS = { PENDING: 'Aguardando pagamento', OVERDUE: 'Vencida', DELETED: 'Cancelada', REFUNDED: 'Estornada', AWAITING_RISK_ANALYSIS: 'Em análise' };
 const fmtCpf = (v) => { const d = digits(v); return d.length === 11 ? `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}` : d; };
@@ -1562,8 +1564,12 @@ async function formAsaas() {
     <button class="btn ghost" id="fechar" style="margin-top:10px">Fechar</button>`);
   const resultado = (el, r) => {
     el.innerHTML = `<b class="ok">Conexão ok.</b> ${r.nome ? `Conta: ${esc(r.nome)} · ` : ''}saldo ${money(r.saldo)}`
-      + (r.pix === false ? '<div class="neg" style="margin-top:6px">Atenção: a conta não tem chave Pix. Cadastre uma no Asaas (Pix → Minhas chaves) para gerar QR code. O link de pagamento funciona sem ela.</div>'
-        : r.pix ? '<div class="hint">Chave Pix cadastrada.</div>' : '');
+      + (r.conta_status && r.conta_status.geral && r.conta_status.geral !== 'APPROVED'
+        ? `<div class="neg" style="margin-top:6px">A conta Asaas ainda não está aprovada (${esc(SITUACAO_CONTA[r.conta_status.geral] || r.conta_status.geral)}). Sem aprovação o Asaas não libera o Pix. Confira os dados comerciais no Asaas (Minha conta).</div>` : '')
+      + (r.pix === false ? `<div class="neg" style="margin-top:6px">${r.chaves_pix && r.chaves_pix.length
+          ? `A conta tem ${r.chaves_pix.length} chave(s) Pix, mas nenhuma ativa (${esc([...new Set(r.chaves_pix.map((x) => SITUACAO_CHAVE[x] || x))].join(', '))}).`
+          : 'A conta não tem chave Pix. Cadastre uma no Asaas (Pix → Minhas chaves).'} Sem chave ativa não sai QR code; o link de pagamento funciona sem ela.</div>`
+        : r.pix ? '<div class="hint">Chave Pix ativa.</div>' : '');
   };
   const err = (m) => { $('#err', s).textContent = m; };
   $('#fechar', s).onclick = closeSheet;
