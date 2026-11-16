@@ -401,3 +401,11 @@ body.carregando::before { opacity: 1; animation: carregando 1s linear infinite; 
 .fotos-ed .foto .icon-btn { position: absolute; top: 6px; right: 6px; width: 32px; height: 32px; }
 .fotos-ed .foto.nova { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 4px; color: var(--muted); cursor: pointer; border-style: dashed; font-size: 13px; }
 .fotos-ed .foto.nova svg { width: 24px; height: 24px; }
+
+/* ---------- Pagamentos online (Asaas) ---------- */
+.qr-pix { display: block; width: 220px; max-width: 70%; margin: 4px auto 14px; background: #fff; border-radius: 12px; padding: 8px; }
+.cob-status { text-align: center; font-weight: 600; margin: 10px 0 4px; color: var(--muted); }
+.cob-status.ok, .cob-status .ok { color: var(--green); }
+ol.passos { margin: 0 0 14px; padding-left: 20px; color: var(--muted); font-size: 14px; }
+ol.passos li { margin-bottom: 6px; }
+ol.passos a { color: var(--gold); }

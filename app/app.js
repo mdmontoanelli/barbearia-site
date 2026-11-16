@@ -454,6 +454,7 @@ async function iniciarSessao(codigo, u) {
   S.user = { id: u.id, nome: u.nome, login: u.login, admin: u.admin };
   S.view = 'inicio';
   await carregarCfg();
+  S.asaas = await DB.rpc('asaas_configurado').catch(() => false);
   renderShell();
 }
 
@@ -634,7 +635,7 @@ async function viewInicio(el) {
   const mes = monthKey(hoje);
   const ano = hoje.slice(0, 4);
 
-  const [ags, entHoje, m, aniv, estoqueBaixo, contas, amanha, aluguel] = await Promise.all([
+  const [ags, entHoje, m, aniv, estoqueBaixo, contas, amanha, aluguel, cobrancas] = await Promise.all([
     DB.q(`${SQL_AG} WHERE a.data = ? AND a.status <> 'cancelado' ORDER BY a.hora`, [hoje]),
     isAdmin() ? DB.val(`SELECT COALESCE(SUM(valor),0) FROM lancamentos WHERE tipo='entrada' AND data=?`, [hoje]) : 0,
     isAdmin() ? DB.one(`SELECT
@@ -646,6 +647,7 @@ async function viewInicio(el) {
     isAdmin() ? despesasAVencer() : [],
     DB.val("SELECT COUNT(*) FROM agendamentos WHERE data=? AND status='agendado' AND lembrete_em IS NULL", [addDays(hoje, 1)]),
     isAdmin() ? DB.rpc('minha_assinatura').catch(() => null) : null,
+    cobrancasAbertas().catch(() => []),
   ]);
   const pendentes = ags.filter((a) => a.status === 'agendado').length;
   // Aviso do aluguel do sistema: só perto do vencimento ou vencido (não bloqueia nada).
@@ -672,6 +674,16 @@ async function viewInicio(el) {
       <div class="stat gold"><div class="lbl">Entradas hoje</div><div class="val">${money(entHoje)}</div></div>
       <div class="stat"><div class="lbl">Saldo do mês</div><div class="val ${m.ent - m.sai >= 0 ? 'pos' : 'neg'}">${money(m.ent - m.sai)}</div></div>` : ''}
     </div>
+
+    ${cobrancas.length ? `
+      <div class="section-title">Cobranças online (Asaas)</div>
+      <div class="list">${cobrancas.map((c) => `
+        <button class="item" data-cob="${c.id}">
+          <div class="main"><div class="t">${esc(c.cliente || 'Cliente')}</div>
+            <div class="s">${c.tipo === 'pix' ? 'Pix' : 'Link de pagamento'} · ${esc(fmtDate(c.criado_em.slice(0, 10)))} ${esc(c.criado_em.slice(11, 16))}</div></div>
+          <div class="right"><div>${money(c.valor)}</div>
+            <span class="badge ${PAGOS_ASAAS.includes(c.status) ? 'b-concluido' : 'b-agendado'}">${PAGOS_ASAAS.includes(c.status) ? 'Pago · concluir' : esc(STATUS_ASAAS[c.status] || c.status)}</span></div>
+        </button>`).join('')}</div>` : ''}
 
     <div class="section-title">Atalhos</div>
     <div class="quick">
@@ -726,6 +738,7 @@ async function viewInicio(el) {
   if ($('#bk-fechar')) $('#bk-fechar').onclick = () => { S.backupAviso = null; refresh(); };
   if ($('#bk-enviar')) $('#bk-enviar').onclick = safe(async () => { S.backupAviso = null; await baixarBackup(false); refresh(); });
   bindAgItems(el);
+  el.querySelectorAll('[data-cob]').forEach((b) => (b.onclick = safe(() => telaCobranca(cobrancas.find((c) => c.id === Number(b.dataset.cob))))));
   el.querySelectorAll('[data-estoque]').forEach((b) => (b.onclick = () => go('produtos')));
   el.querySelectorAll('[data-cli]').forEach((b) => (b.onclick = safe(() => detalheCliente(Number(b.dataset.cli)))));
   el.querySelectorAll('[data-parabens]').forEach((b) => (b.onclick = safe(async (e) => {
@@ -1251,6 +1264,8 @@ async function concluirAtendimento(a) {
         <button class="btn ghost small" id="add-prod" type="button">+ Adicionar produto</button></div>` : ''}
     <div class="field" id="forma-box"><label>Forma de pagamento</label>
       <div class="seg" id="forma">${FORMAS.map((f, i) => `<button data-f="${f}" class="${i === 1 ? 'on' : ''}">${f}</button>`).join('')}</div>
+      ${S.asaas ? `<label style="margin-top:4px">Ou cobrar online pelo Asaas</label>
+      <div class="seg">${[['asaas-pix', 'Pix com QR code'], ['asaas-link', 'Link: cartão ou Pix']].map(([f, l]) => `<button data-f="${f}">${l}</button>`).join('')}</div>` : ''}
     </div>
     <div class="total" id="total"></div>
     <div class="err" id="err"></div>
@@ -1313,6 +1328,23 @@ async function concluirAtendimento(a) {
       const somado = itens.filter((x) => x.id === it.id).reduce((t, x) => t + x.qtd, 0);
       if (somado > it.estoque) return err(`Estoque insuficiente de ${it.nome}. Disponível: ${it.estoque}.`);
     }
+    const ctx = { a, modo, pacote, valor, itens: itens.map((it) => ({ ...it })) };
+    const total = round2(valor + totalProdutos());
+    // Cobrança online: o atendimento só é concluído quando o pagamento cair no Asaas.
+    if (forma.startsWith('asaas-') && total > 0) return cobrarOnline(ctx, forma === 'asaas-pix' ? 'pix' : 'link', total);
+    const formaFinal = forma.startsWith('asaas-') ? FORMAS[1] : forma;
+    await DB.batch(cmdsConclusao(ctx, formaFinal, (v) => taxaDe(formaFinal, v)));
+    closeAll(); refresh();
+    toast(modo === 'pacote' ? 'Atendimento lançado no pacote' : modo === 'brinde' ? 'Cortesia registrada' : `Recebido ${money(total)} (${formaFinal})`);
+    return undefined;
+  });
+}
+
+/* Comandos que concluem o atendimento (status, pacote/cortesia, lançamentos, venda e baixa de produtos),
+   tudo num batch só. ctx = { a, modo, pacote, valor, itens }; taxa(valor) = taxa da forma de pagamento. */
+function cmdsConclusao(ctx, forma, taxa) {
+  const { a, modo, pacote, valor, itens } = ctx;
+  {
     // No encaixe o atendimento é criado no mesmo batch; currval devolve o id que esta transação acabou de gerar.
     const agRef = a.id ? '?' : "currval(pg_get_serial_sequence('agendamentos','id'))";
     const agParam = a.id ? [a.id] : [];
@@ -1334,23 +1366,226 @@ async function concluirAtendimento(a) {
       if (valor > 0) {
         cmds.push({ sql: `INSERT INTO lancamentos (tipo, descricao, categoria, valor, taxa, data, forma_pagamento, agendamento_id, usuario_id)
           VALUES ('entrada', ?, 'Serviço', ?, ?, ?, ?, ${agRef}, ?)`,
-          params: [`${a.servico || 'Atendimento'} — ${a.cliente}`, valor, taxaDe(forma, valor), today(), forma, ...agParam, S.user.id] });
+          params: [`${a.servico || 'Atendimento'} — ${a.cliente}`, valor, taxa(valor), today(), forma, ...agParam, S.user.id] });
       }
     }
     itens.forEach((it) => {
       const total = round2(it.preco * it.qtd);
       cmds.push(
         { sql: "INSERT INTO lancamentos (tipo, descricao, categoria, valor, taxa, data, forma_pagamento, usuario_id) VALUES ('entrada', ?, 'Produto', ?, ?, ?, ?, ?)",
-          params: [`Venda: ${it.nome} (${it.qtd} un.) — ${a.cliente}`, total, taxaDe(forma, total), today(), forma, S.user.id] },
+          params: [`Venda: ${it.nome} (${it.qtd} un.) — ${a.cliente}`, total, taxa(total), today(), forma, S.user.id] },
         { sql: `INSERT INTO vendas_produtos (lancamento_id, produto_id, produto_nome, quantidade, custo_unitario, preco_unitario) VALUES (currval(pg_get_serial_sequence('lancamentos','id')),?,?,?,?,?)`,
           params: [it.id, it.nome, it.qtd, it.custo, it.preco] },
         { sql: 'UPDATE produtos SET estoque=estoque-? WHERE id=? AND estoque>=?', params: [it.qtd, it.id, it.qtd],
           requireChanges: true, error: `Estoque insuficiente de ${it.nome}.` });
     });
-    await DB.batch(cmds);
-    closeAll(); refresh();
-    const total = valor + totalProdutos();
-    toast(modo === 'pacote' ? 'Atendimento lançado no pacote' : modo === 'brinde' ? 'Cortesia registrada' : `Recebido ${money(total)} (${forma})`);
+    return cmds;
+  }
+}
+
+/* ======================= PAGAMENTOS ONLINE (ASAAS) ======================= */
+const PAGOS_ASAAS = ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'];
+const FORMA_ASAAS = { PIX: 'Pix', CREDIT_CARD: 'Crédito', DEBIT_CARD: 'Débito', BOLETO: 'Boleto' };
+const STATUS_ASAAS = { PENDING: 'Aguardando pagamento', OVERDUE: 'Vencida', DELETED: 'Cancelada', REFUNDED: 'Estornada', AWAITING_RISK_ANALYSIS: 'Em análise' };
+const fmtCpf = (v) => { const d = digits(v); return d.length === 11 ? `${d.slice(0, 3)}.${d.slice(3, 6)}.${d.slice(6, 9)}-${d.slice(9)}` : d; };
+function cpfValido(c) {
+  c = digits(c);
+  if (c.length === 14) return true; // CNPJ: o Asaas confere
+  if (c.length !== 11 || /^(\d)\1+$/.test(c)) return false;
+  const dv = (n) => { let t = 0; for (let i = 0; i < n; i++) t += Number(c[i]) * (n + 1 - i); const r = (t * 10) % 11; return r === 10 ? 0 : r; };
+  return dv(9) === Number(c[9]) && dv(10) === Number(c[10]);
+}
+
+/* Chama a função do servidor que fala com o Asaas (a chave de API nunca vem para o navegador). */
+async function asaasApi(acao, dados = {}) {
+  if (navigator.onLine === false) throw new Error('Sem conexão com a internet. Verifique e tente de novo.');
+  carregando(1);
+  try {
+    const { data, error } = await sb.functions.invoke('asaas', { body: { acao, ...dados } });
+    if (error) throw new Error('Não foi possível falar com o servidor de pagamentos. Tente de novo.');
+    if (data && data.erro) throw new Error(data.erro);
+    return data;
+  } finally { carregando(-1); }
+}
+
+/* Pede o CPF do cliente (o Asaas exige para cadastrar quem paga). Devolve só os dígitos ou null. */
+function pedirCpf(nome) {
+  return new Promise((resolve) => {
+    const s = sheet(`
+      <h3>CPF de ${esc(String(nome).split(' ')[0])}</h3>
+      <p class="hint" style="margin-top:-8px">O Asaas pede o CPF de quem paga. Fica salvo no cadastro para as próximas vezes.</p>
+      <div class="field"><label>CPF</label><input id="cpf" inputmode="numeric" placeholder="000.000.000-00"></div>
+      <div class="err" id="err"></div>
+      <div class="btns two"><button class="btn ghost" id="c">Voltar</button><button class="btn" id="ok">Continuar</button></div>`, { center: true });
+    $('#c', s).onclick = () => { closeSheet(); resolve(null); };
+    $('#ok', s).onclick = () => {
+      const cpf = digits($('#cpf', s).value);
+      if (!cpfValido(cpf)) { $('#err', s).textContent = 'CPF inválido. Confira os números.'; return; }
+      closeSheet();
+      resolve(cpf);
+    };
+    setTimeout(() => $('#cpf', s).focus(), 50);
+  });
+}
+
+async function cobrarOnline(ctx, tipo, total) {
+  const cli = await DB.one('SELECT nome, cpf FROM clientes WHERE id=?', [ctx.a.cliente_id]);
+  const cpf = cli && cli.cpf ? cli.cpf : await pedirCpf(ctx.a.cliente);
+  if (!cpf) return;
+  const c = await asaasApi('cobrar', {
+    cliente_id: ctx.a.cliente_id, valor: total, tipo, cpf, agendamento_id: ctx.a.id || null, dados: JSON.stringify(ctx),
+    descricao: `${ctx.a.servico || 'Atendimento'}${ctx.itens.length ? ' + produtos' : ''} — ${cfg('nome_barbearia', S.estab ? S.estab.nome : '')}`,
+  });
+  closeAll();
+  telaCobranca({ ...c, cliente: ctx.a.cliente, telefone: ctx.a.telefone });
+}
+
+/* Cobrança aberta: QR do Pix ou link de pagamento. Confere o pagamento a cada poucos segundos
+   enquanto a janela está aberta; quando cai, conclui o atendimento sozinho. */
+async function telaCobranca(c) {
+  if (c.telefone === undefined) {
+    const cli = await DB.one('SELECT nome, telefone FROM clientes WHERE id=?', [c.cliente_id]);
+    Object.assign(c, { cliente: cli ? cli.nome : 'Cliente', telefone: cli ? cli.telefone : null });
+  }
+  if (c.tipo === 'pix' && !c.pix_imagem && !PAGOS_ASAAS.includes(c.status)) c = { ...c, ...(await asaasApi('consultar', { id: c.id, qr: true })) };
+  const msgLink = `Olá, ${String(c.cliente).split(' ')[0]}! Segue o link para pagar ${money(c.valor)} (cartão de crédito, débito ou Pix): ${c.invoice_url}`;
+  const s = sheet(`
+    <h3>${c.tipo === 'pix' ? 'Pix' : 'Link de pagamento'} · ${money(c.valor)}</h3>
+    <p class="hint" style="margin-top:-8px">${esc(c.cliente)}</p>
+    <div id="cob-corpo">
+      ${c.tipo === 'pix' ? `
+        ${c.pix_imagem ? `<img src="data:image/png;base64,${esc(c.pix_imagem)}" alt="QR code do Pix" class="qr-pix">` : ''}
+        <div class="field"><label>Pix copia e cola</label><div style="display:flex;gap:8px">
+          <input class="search" readonly value="${esc(c.pix_payload || '')}" style="margin:0"><button class="btn small ghost" id="copiar">Copiar</button></div></div>`
+      : `<p>Envie o link para o cliente pagar no celular dele, ou abra aqui para ele digitar o cartão.</p>
+        <div class="btns two"><button class="btn green" id="wa">Enviar no WhatsApp</button><a class="btn ghost" href="${esc(c.invoice_url)}" target="_blank" rel="noopener" style="text-align:center;text-decoration:none">Abrir o link</a></div>
+        <div style="display:flex;gap:8px;margin-top:10px"><input class="search" readonly value="${esc(c.invoice_url || '')}" style="margin:0"><button class="btn small ghost" id="copiar">Copiar</button></div>`}
+    </div>
+    <div class="cob-status" id="st">${esc(STATUS_ASAAS[c.status] || c.status)}…</div>
+    <div class="err" id="err"></div>
+    <div class="btns two"><button class="btn danger" id="cancelar">Cancelar cobrança</button><button class="btn ghost" id="fechar">Fechar</button></div>
+    <p class="hint" style="margin-top:10px">Pode fechar: a cobrança fica na tela inicial e o atendimento é concluído quando o pagamento cair.</p>`, { center: true });
+  const ov = s.parentElement;
+  let ativo = true;
+  const parar = () => { ativo = false; };
+  $('#copiar', s).onclick = () => {
+    const t = c.tipo === 'pix' ? c.pix_payload : c.invoice_url;
+    if (navigator.clipboard && window.isSecureContext) navigator.clipboard.writeText(t).then(() => toast('Copiado'), () => toast('Não foi possível copiar', true));
+  };
+  if ($('#wa', s)) $('#wa', s).onclick = () => abrirWhats(c.telefone, msgLink);
+  $('#fechar', s).onclick = () => { parar(); closeSheet(); refresh(); };
+  $('#cancelar', s).onclick = safe(async () => {
+    if (!(await confirmBox(`Cancelar a cobrança de ${money(c.valor)}? O cliente não vai mais conseguir pagar por ela.`, 'Cancelar cobrança'))) return;
+    await asaasApi('cancelar', { id: c.id });
+    parar(); closeSheet(); refresh();
+    toast('Cobrança cancelada');
+  });
+  const conferir = async () => {
+    if (!ativo || !ov.isConnected) return;
+    try {
+      const atual = await asaasApi('consultar', { id: c.id });
+      if (!ativo || !ov.isConnected) return;
+      if (atual.pago) {
+        parar();
+        $('#st', s).textContent = 'Pagamento recebido! Concluindo…';
+        $('#st', s).classList.add('ok');
+        await finalizarCobranca(atual);
+        closeAll(); refresh();
+        return;
+      }
+      $('#st', s).textContent = `${STATUS_ASAAS[atual.status] || atual.status}…`;
+      if (['DELETED', 'REFUNDED'].includes(atual.status)) { parar(); return; }
+    } catch (e) { $('#err', s).textContent = mensagemErro(e); }
+    setTimeout(conferir, 4000);
+  };
+  if (PAGOS_ASAAS.includes(c.status)) { $('#st', s).textContent = 'Pagamento recebido! Concluindo…'; parar(); await finalizarCobranca(c); closeAll(); refresh(); return; }
+  setTimeout(conferir, 3000);
+}
+
+/* Conclui o atendimento de uma cobrança paga: forma = a que o cliente usou, taxa = a do Asaas. */
+async function finalizarCobranca(c) {
+  let ctx = null;
+  try { ctx = JSON.parse(c.dados); } catch (e) { ctx = null; }
+  if (!ctx || !ctx.a) throw new Error('Não foi possível ler o atendimento desta cobrança. Conclua pela agenda.');
+  const forma = FORMA_ASAAS[c.forma_paga] || 'Pix';
+  const valor = Number(c.valor);
+  const liquido = c.valor_liquido == null ? valor : Number(c.valor_liquido);
+  const fracaoTaxa = valor > 0 ? Math.max(0, valor - liquido) / valor : 0;
+  const cmds = [
+    { sql: 'UPDATE asaas_cobrancas SET concluida=1 WHERE id=? AND concluida=0', params: [c.id], requireChanges: true, error: 'Esta cobrança já foi concluída.' },
+    ...cmdsConclusao(ctx, forma, (v) => round2(v * fracaoTaxa)),
+  ];
+  await DB.batch(cmds);
+  toast(`Recebido ${money(valor)} pelo Asaas (${forma})`);
+}
+
+/* Cobranças online em aberto ou pagas esperando a conclusão (tela inicial). */
+async function cobrancasAbertas() {
+  if (!S.asaas) return [];
+  return DB.q(`SELECT ac.*, c.nome AS cliente, c.telefone FROM asaas_cobrancas ac LEFT JOIN clientes c ON c.id = ac.cliente_id
+    WHERE ac.concluida = 0 AND ac.status NOT IN ('DELETED', 'REFUNDED') ORDER BY ac.id DESC LIMIT 20`);
+}
+
+/* ---- Configuração do Asaas (administrador) ---- */
+async function formAsaas() {
+  const st = await asaasApi('status');
+  const s = sheet(`
+    <h3>Pagamentos online (Asaas)</h3>
+    ${st.configurado ? `
+      <div class="card alert" style="border-color:var(--green);background:var(--green-soft)"><div><b>Asaas ativo</b>
+        <div class="hint">Na hora de receber, aparecem as opções <b>Pix com QR code</b> e <b>Link: cartão ou Pix</b>.</div></div></div>
+      <div class="kv"><span>Conta</span><span>${esc(st.conta_nome || '—')}</span></div>
+      <div class="kv"><span>Ambiente</span><span>${st.ambiente === 'sandbox' ? 'Teste (sandbox)' : 'Produção'}</span></div>
+      <div class="kv"><span>Chave de API</span><span>•••• ${esc(st.chave_final || '')}</span></div>
+      <div class="kv"><span>Aviso automático de pagamento</span><span>${st.webhook_ok ? 'Ligado' : 'Desligado (o sistema confere pela tela)'}</span></div>
+      <div class="cob-status" id="res"></div>
+      <div class="btns two" style="margin-top:12px"><button class="btn ghost" id="testar-salva">Testar conexão</button><button class="btn ghost" id="trocar">Trocar chave</button></div>
+      <button class="btn danger" id="desligar" style="margin-top:10px">Desativar o Asaas</button>` : ''}
+    <div id="form-chave" style="${st.configurado ? 'display:none' : ''}">
+      ${st.configurado ? '' : `<p class="hint" style="margin-top:-8px">Receba por Pix e cartão (crédito ou débito) direto na sua conta Asaas. Sem configurar, o sistema continua igual.</p>
+      <ol class="passos">
+        <li>Abra sua conta em <a href="https://www.asaas.com" target="_blank" rel="noopener">asaas.com</a> (é grátis; o Asaas cobra uma taxa por pagamento recebido).</li>
+        <li>No Asaas, cadastre uma <b>chave Pix</b> na sua conta.</li>
+        <li>Em <b>Integrações → Chaves de API</b>, gere uma chave e cole aqui.</li>
+      </ol>`}
+      <div class="field"><label>Ambiente</label><select id="amb">${opt('producao', 'Produção (dinheiro de verdade)', st.ambiente || 'producao')}${opt('sandbox', 'Teste (conta do sandbox.asaas.com)', st.ambiente || 'producao')}</select></div>
+      <div class="field"><label>Chave de API</label><input id="chave" type="password" autocomplete="off" placeholder="$aact_..."></div>
+      <div class="cob-status" id="res2"></div>
+      <div class="err" id="err"></div>
+      <div class="btns two"><button class="btn ghost" id="testar">Testar conexão</button><button class="btn" id="salvar">Salvar e ativar</button></div>
+    </div>
+    <button class="btn ghost" id="fechar" style="margin-top:10px">Fechar</button>`);
+  const resultado = (el, r) => { el.innerHTML = `<b class="ok">Conexão ok.</b> ${r.nome ? `Conta: ${esc(r.nome)} · ` : ''}saldo ${money(r.saldo)}`; };
+  const err = (m) => { $('#err', s).textContent = m; };
+  $('#fechar', s).onclick = closeSheet;
+  if ($('#trocar', s)) $('#trocar', s).onclick = () => { $('#form-chave', s).style.display = ''; $('#chave', s).focus(); };
+  if ($('#testar-salva', s)) $('#testar-salva', s).onclick = safe(async () => { $('#res', s).textContent = 'Testando…'; try { resultado($('#res', s), await asaasApi('testar')); } catch (e) { $('#res', s).innerHTML = `<span class="neg">${esc(e.message)}</span>`; } });
+  if ($('#desligar', s)) $('#desligar', s).onclick = safe(async () => {
+    if (!(await confirmBox('Desativar o Asaas? As opções de cobrança online somem da tela de receber. Sua conta no Asaas não é alterada.', 'Desativar'))) return;
+    await asaasApi('remover');
+    S.asaas = false;
+    closeSheet(); refresh();
+    toast('Asaas desativado');
+  });
+  const ler = () => ({ ambiente: $('#amb', s).value, chave: $('#chave', s).value.trim() });
+  $('#testar', s).onclick = safe(async () => {
+    err('');
+    const d = ler();
+    if (!d.chave) return err('Cole a chave de API do Asaas.');
+    $('#res2', s).textContent = 'Testando…';
+    try { resultado($('#res2', s), await asaasApi('testar', d)); } catch (e) { $('#res2', s).textContent = ''; err(e.message); }
+    return undefined;
+  });
+  $('#salvar', s).onclick = safe(async () => {
+    err('');
+    const d = ler();
+    if (!d.chave) return err('Cole a chave de API do Asaas.');
+    let r;
+    try { r = await asaasApi('salvar', d); } catch (e) { return err(e.message); }
+    S.asaas = true;
+    closeSheet(); refresh();
+    toast(r.webhook_ok ? 'Asaas ativado' : 'Asaas ativado (sem aviso automático; o sistema confere pela tela)');
+    return undefined;
   });
 }
 
@@ -1392,12 +1627,13 @@ async function viewClientes(el) {
 }
 
 function formCliente(c = null, after = null) {
-  const x = c || { nome: '', telefone: '', nascimento: '', observacoes: '' };
+  const x = c || { nome: '', telefone: '', nascimento: '', observacoes: '', cpf: '' };
   const s = sheet(`
     <h3>${c ? 'Editar cliente' : 'Novo cliente'}</h3>
     <div class="field"><label>Nome</label><input id="nome" value="${esc(x.nome)}" autocapitalize="words"></div>
     <div class="field"><label>Telefone / WhatsApp</label><input id="tel" type="tel" inputmode="tel" placeholder="(17) 99999-9999" value="${esc(fmtPhone(x.telefone))}"></div>
     ${campoNascimento('Data de nascimento', x.nascimento)}
+    ${S.asaas ? `<div class="field"><label>CPF (para pagamentos online)</label><input id="cpf" inputmode="numeric" value="${esc(fmtCpf(x.cpf))}" placeholder="000.000.000-00"></div>` : ''}
     <div class="field"><label>Observações (preferências, alergias…)</label><textarea id="obs">${esc(x.observacoes || '')}</textarea></div>
     <div class="err" id="err"></div>
     <div class="btns two">
@@ -1412,12 +1648,14 @@ function formCliente(c = null, after = null) {
     let nasc;
     try { nasc = lerNascimento(s); } catch (e) { return ($('#err', s).textContent = e.message); }
     const obs = $('#obs', s).value.trim();
+    const cpf = $('#cpf', s) ? digits($('#cpf', s).value) : digits(x.cpf);
+    if (cpf && !cpfValido(cpf)) return ($('#err', s).textContent = 'CPF inválido. Confira os números (ou deixe em branco).');
     let id = c && c.id;
     if (c) {
-      await DB.x('UPDATE clientes SET nome=?, telefone=?, nascimento=?, observacoes=? WHERE id=?', [nome, tel, nasc, obs, c.id]);
+      await DB.x('UPDATE clientes SET nome=?, telefone=?, nascimento=?, observacoes=?, cpf=? WHERE id=?', [nome, tel, nasc, obs, cpf || null, c.id]);
       toast('Cliente atualizado');
     } else {
-      id = (await DB.x('INSERT INTO clientes (nome, telefone, nascimento, observacoes) VALUES (?,?,?,?)', [nome, tel, nasc, obs])).lastId;
+      id = (await DB.x('INSERT INTO clientes (nome, telefone, nascimento, observacoes, cpf) VALUES (?,?,?,?,?)', [nome, tel, nasc, obs, cpf || null])).lastId;
       toast('Cliente cadastrado');
     }
     closeAll();
@@ -2184,6 +2422,7 @@ function viewMais(el) {
       ['taxas', 'Taxas da maquininha', `Débito ${cfg('taxa_debito', '0')}% · Crédito ${cfg('taxa_credito', '0')}% · Pix ${cfg('taxa_pix', '0')}%`],
       ['barbearia', 'Nome do estabelecimento', cfg('nome_barbearia', '')],
       ['vitrine', 'Página e agendamento online', 'Logo, fotos, endereço e cancelamento pelo cliente'],
+      ['asaas', 'Pagamentos online (Asaas)', S.asaas ? 'Ativo · Pix e cartão pelo Asaas' : 'Receber por Pix e cartão no Asaas'],
       ['backup', 'Backup dos dados', ultimoBackup ? `Último: ${fmtDate(ultimoBackup)}` : 'Baixar uma cópia dos dados'],
       ['exclusoes', 'Histórico de exclusões', 'O que foi apagado, quando e por quem'],
     ] : []),
@@ -2202,7 +2441,7 @@ function viewMais(el) {
     servicos: listaServicos, usuarios: listaUsuarios, barbearia: formNomeBarbearia,
     backup: telaBackup, senha: formMinhaSenha, sair: logout,
     pacotes: listaPacotes, fidelidade: formFidelidade, horarios: listaHorarios,
-    mensagens: formMensagens, taxas: formTaxas, exclusoes: listaExclusoes, vitrine: formVitrine, instalar: instalarApp,
+    mensagens: formMensagens, taxas: formTaxas, exclusoes: listaExclusoes, vitrine: formVitrine, instalar: instalarApp, asaas: formAsaas,
   };
   el.querySelectorAll('[data-k]').forEach((b) => (b.onclick = safe(() => acts[b.dataset.k]())));
 }
