@@ -1262,11 +1262,12 @@ async function concluirAtendimento(a) {
     ${produtos.length ? `
       <div class="field"><label>Produtos vendidos junto</label><div id="itens"></div>
         <button class="btn ghost small" id="add-prod" type="button">+ Adicionar produto</button></div>` : ''}
-    <div class="field" id="forma-box"><label>Forma de pagamento</label>
+    <div class="field" id="forma-box"><label>${S.asaas ? 'Já recebido (dinheiro, Pix direto ou maquininha)' : 'Forma de pagamento'}</label>
       <div class="seg" id="forma">${FORMAS.map((f, i) => `<button data-f="${f}" class="${i === 1 ? 'on' : ''}">${f}</button>`).join('')}</div>
-      ${S.asaas ? `<label style="margin-top:4px">Ou cobrar online pelo Asaas</label>
-      <div class="seg">${[['asaas-pix', 'Pix com QR code'], ['asaas-link', 'Link: cartão ou Pix']].map(([f, l]) => `<button data-f="${f}">${l}</button>`).join('')}</div>` : ''}
+      ${S.asaas ? `<div class="asaas-box"><label>Cobrar pelo Asaas (o dinheiro cai na conta Asaas)</label>
+      <div class="seg">${[['asaas-pix', 'Pix com QR code'], ['asaas-link', 'Link: cartão ou Pix']].map(([f, l]) => `<button data-f="${f}">${l}</button>`).join('')}</div></div>` : ''}
     </div>
+    <p class="hint" id="forma-info"></p>
     <div class="total" id="total"></div>
     <div class="err" id="err"></div>
     <div class="btns two">
@@ -1314,6 +1315,10 @@ async function concluirAtendimento(a) {
   s.querySelectorAll('[data-f]').forEach((b) => (b.onclick = () => {
     forma = b.dataset.f;
     s.querySelectorAll('[data-f]').forEach((x) => x.classList.toggle('on', x === b));
+    $('#forma-info', s).textContent = forma === 'asaas-pix' ? 'Ao confirmar, aparece o QR code do Pix. O atendimento é concluído quando o pagamento cair.'
+      : forma === 'asaas-link' ? 'Ao confirmar, aparece o link para o cliente pagar com cartão de crédito, débito ou Pix.'
+      : S.asaas ? `Registra agora como recebido em ${forma}, sem passar pelo Asaas.` : '';
+    $('#ok', s).textContent = forma.startsWith('asaas-') ? 'Gerar cobrança' : 'Confirmar';
   }));
   $('#valor', s).oninput = atualizar;
   atualizar();
@@ -1555,7 +1560,11 @@ async function formAsaas() {
       <div class="btns two"><button class="btn ghost" id="testar">Testar conexão</button><button class="btn" id="salvar">Salvar e ativar</button></div>
     </div>
     <button class="btn ghost" id="fechar" style="margin-top:10px">Fechar</button>`);
-  const resultado = (el, r) => { el.innerHTML = `<b class="ok">Conexão ok.</b> ${r.nome ? `Conta: ${esc(r.nome)} · ` : ''}saldo ${money(r.saldo)}`; };
+  const resultado = (el, r) => {
+    el.innerHTML = `<b class="ok">Conexão ok.</b> ${r.nome ? `Conta: ${esc(r.nome)} · ` : ''}saldo ${money(r.saldo)}`
+      + (r.pix === false ? '<div class="neg" style="margin-top:6px">Atenção: a conta não tem chave Pix. Cadastre uma no Asaas (Pix → Minhas chaves) para gerar QR code. O link de pagamento funciona sem ela.</div>'
+        : r.pix ? '<div class="hint">Chave Pix cadastrada.</div>' : '');
+  };
   const err = (m) => { $('#err', s).textContent = m; };
   $('#fechar', s).onclick = closeSheet;
   if ($('#trocar', s)) $('#trocar', s).onclick = () => { $('#form-chave', s).style.display = ''; $('#chave', s).focus(); };

@@ -409,3 +409,5 @@ body.carregando::before { opacity: 1; animation: carregando 1s linear infinite; 
 ol.passos { margin: 0 0 14px; padding-left: 20px; color: var(--muted); font-size: 14px; }
 ol.passos li { margin-bottom: 6px; }
 ol.passos a { color: var(--gold); }
+.asaas-box { margin-top: 10px; padding: 10px; border-radius: 12px; border: 1px dashed var(--gold); background: var(--gold-soft); }
+.asaas-box label { color: var(--text) !important; font-weight: 600; }
